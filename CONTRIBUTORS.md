@@ -15,4 +15,4 @@ built by:
 
 Their work is not visible in this repository's commit log, so it is recorded here instead.
 
-Copyright is held by Domotz; see [LICENSE](LICENSE).
+Copyright is held by Domotz Inc.; see [LICENSE](LICENSE).
