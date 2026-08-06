@@ -35,7 +35,16 @@
         "url": "https://portal.domotz.com/api"
       }
     ],
-    "screenshots": [],
+    "screenshots": [
+      {
+        "name": "Starter dashboard",
+        "path": "img/dashboard.png"
+      },
+      {
+        "name": "Query editor",
+        "path": "img/query-editor.png"
+      }
+    ],
     "version": "%VERSION%",
     "updated": "%TODAY%"
   },

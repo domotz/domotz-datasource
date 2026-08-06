@@ -1,6 +1,6 @@
 {
   "name": "domotz-datasource",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0-beta.3",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
@@ -89,6 +89,9 @@
     "@grafana/ui": "^12.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.7"
   },
   "packageManager": "npm@10.9.2"
 }

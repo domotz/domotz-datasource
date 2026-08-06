@@ -16,11 +16,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # build-plugin defaults to Go 1.25 and setup-go runs with GOTOOLCHAIN=local,
+      # so a go.mod asking for anything newer fails the build outright instead of
+      # fetching a toolchain. The Grafana plugin SDK itself requires 1.26.5, which
+      # puts a floor under us. Read the requirement from go.mod so the workflow and
+      # the module can never drift apart again.
+      - name: Read Go version from go.mod
+        id: go
+        run: echo "version=$(sed -n 's/^go //p' go.mod)" >> "$GITHUB_OUTPUT"
+
       - uses: grafana/plugin-actions/build-plugin@main
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          # The action defaults to Node 20; build on the version the CI and e2e
+          # jobs use, so the released bundle is the one that was tested.
+          node-version: '22'
         # Uncomment to enable plugin signing
         # (For more info on how to generate the access policy token see https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin#generate-an-access-policy-token)
-        #with:
         # Make sure to save the token in your repository secrets
-        #policy_token: $
-        # Usage of GRAFANA_API_KEY is deprecated, prefer `policy_token` option above
-        #grafana_token: $
+        #  policy_token: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}

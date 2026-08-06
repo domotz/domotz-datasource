@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.0-beta.3
+
+No functional change. This release exists to prove the automated build: the release workflow was
+failing, so beta.1 and beta.2 were packaged by hand.
+
+- The release and CI workflows now take their Go version from `go.mod`. They pinned older versions,
+  and `setup-go` runs with `GOTOOLCHAIN=local`, so the build refused to start rather than fetching
+  the toolchain the Grafana plugin SDK requires.
+- Development dependencies carrying known vulnerabilities are updated. The plugin validator fails a
+  release on those, and it is a precondition for submitting to the Grafana catalogue.
+- The licence carries a real copyright line instead of the Apache template placeholder.
+
 ## 1.0.0-beta.2
 
 - The sample dashboard is replaced by a portable starter that hardcodes nothing: every panel is
