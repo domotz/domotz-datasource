@@ -1,0 +1,393 @@
+{
+  "uid": "domotz-starter",
+  "title": "Domotz - starter",
+  "description": "Portable starter dashboard. Every panel is driven by template variables, so it works against any Domotz account with no editing.",
+  "tags": [
+    "domotz",
+    "starter"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "domotz-datasource",
+        "refresh": 1,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "collector",
+        "label": "Collector",
+        "description": "Which site to look at.",
+        "type": "query",
+        "datasource": {
+          "type": "domotz-datasource",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "refId": "domotz-collector",
+          "kind": "collectors"
+        },
+        "refresh": 1,
+        "sort": 0,
+        "includeAll": false,
+        "multi": false,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "collectorMetric",
+        "label": "Collector metric",
+        "description": "Metrics reported by the collector itself. Select several.",
+        "type": "query",
+        "datasource": {
+          "type": "domotz-datasource",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "refId": "domotz-collectorMetric",
+          "kind": "collectorVariables",
+          "agentId": "$collector"
+        },
+        "refresh": 1,
+        "sort": 0,
+        "includeAll": false,
+        "multi": true,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "device",
+        "label": "Device",
+        "description": "Devices on the selected collector.",
+        "type": "query",
+        "datasource": {
+          "type": "domotz-datasource",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "refId": "domotz-device",
+          "kind": "devices",
+          "agentId": "$collector"
+        },
+        "refresh": 1,
+        "sort": 0,
+        "includeAll": false,
+        "multi": true,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "deviceMetric",
+        "label": "Device metric",
+        "description": "Metrics of the selected device. Select several.",
+        "type": "query",
+        "datasource": {
+          "type": "domotz-datasource",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "refId": "domotz-deviceMetric",
+          "kind": "deviceVariables",
+          "agentId": "$collector",
+          "deviceId": "$device"
+        },
+        "refresh": 1,
+        "sort": 0,
+        "includeAll": false,
+        "multi": true,
+        "hide": 0,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Collector metrics",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "$collector \u00b7 $collectorMetric",
+      "datasource": {
+        "type": "domotz-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "domotz-datasource",
+            "uid": "${datasource}"
+          },
+          "scope": "collector",
+          "agentId": "$collector",
+          "deviceId": "",
+          "variableId": "$collectorMetric"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "One panel per selected collector metric. Pick several from the Collector metric list above.",
+      "repeat": "collectorMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 2
+    },
+    {
+      "id": 3,
+      "type": "row",
+      "title": "Device metrics",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "$device \u00b7 $deviceMetric",
+      "datasource": {
+        "type": "domotz-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "domotz-datasource",
+            "uid": "${datasource}"
+          },
+          "scope": "device",
+          "agentId": "$collector",
+          "deviceId": "$device",
+          "variableId": "$deviceMetric"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "One panel per selected device metric.",
+      "repeat": "deviceMetric",
+      "repeatDirection": "h",
+      "maxPerRow": 2
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Compare devices",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "$deviceMetric across selected devices",
+      "datasource": {
+        "type": "domotz-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "domotz-datasource",
+            "uid": "${datasource}"
+          },
+          "scope": "device",
+          "agentId": "$collector",
+          "deviceId": "$device",
+          "variableId": "$deviceMetric"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": true,
+            "axisPlacement": "auto",
+            "gradientMode": "opacity",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Select several devices to overlay them on one panel. Combinations that do not exist are skipped, and a query is capped at 20 series."
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "How to use this dashboard",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 7
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "This dashboard hardcodes nothing \u2014 every panel is driven by the variables at the top, so it works\nagainst any Domotz account.\n\n1. **Collector** \u2014 pick a site.\n2. **Collector metric** \u2014 internet quality and other collector-level metrics (Download, Upload,\n   Latency, Jitter, Packet Loss, Bufferbloat \u2026). Select several; each becomes its own panel.\n3. **Device** and **Device metric** \u2014 the same for a device. Selecting several devices overlays\n   them on the *Compare devices* panel.\n\nMetric identifiers are per-collector, so a dashboard cannot pin a metric by name across accounts.\nOnce you have the panels you want, save a copy \u2014 your selections are stored with it."
+      }
+    }
+  ]
+}

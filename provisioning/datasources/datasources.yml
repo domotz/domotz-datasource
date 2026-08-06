@@ -1,0 +1,26 @@
+apiVersion: 1
+
+# Provisioned for local development.
+#
+# The API key comes from the environment so a real credential never lands in
+# the repository:
+#
+#   DOMOTZ_API_KEY=... npm run server
+#
+# Only plain $VAR / ${VAR} interpolation works here. Grafana's provisioning
+# does not understand shell-style ${VAR:-default}, and silently substitutes an
+# empty string for it - so the default lives in docker-compose.yaml instead.
+#
+datasources:
+  - name: 'Domotz'
+    uid: 'domotz-dev'
+    type: 'domotz-datasource'
+    access: proxy
+    isDefault: true
+    orgId: 1
+    version: 1
+    editable: true
+    jsonData:
+      path: '$DOMOTZ_API_URL'
+    secureJsonData:
+      apiKey: '$DOMOTZ_API_KEY'

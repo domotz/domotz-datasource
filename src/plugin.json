@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Domotz",
+  "id": "domotz-datasource",
+  "metrics": true,
+  "backend": true,
+  "alerting": true,
+  "executable": "gpx_domotz_datasource",
+  "info": {
+    "description": "Query and visualise Domotz network monitoring data: collector and device metrics, with full history.",
+    "author": {
+      "name": "Domotz",
+      "url": "https://www.domotz.com"
+    },
+    "keywords": [
+      "domotz",
+      "network",
+      "monitoring",
+      "msp",
+      "snmp",
+      "datasource"
+    ],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [
+      {
+        "name": "Website",
+        "url": "https://www.domotz.com"
+      },
+      {
+        "name": "Public API documentation",
+        "url": "https://portal.domotz.com/api"
+      }
+    ],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=12.3.0",
+    "plugins": []
+  }
+}

@@ -1,0 +1,10 @@
+services:
+  grafana:
+    extends:
+      file: .config/docker-compose-base.yaml
+      service: grafana
+    environment:
+      # Consumed by provisioning/datasources/datasources.yml so a real key is
+      # never committed. Export DOMOTZ_API_KEY before running `npm run server`.
+      DOMOTZ_API_KEY: ${DOMOTZ_API_KEY:-}
+      DOMOTZ_API_URL: ${DOMOTZ_API_URL:-https://api-eu-west-1-cell-1.domotz.com/public-api/v1/}
