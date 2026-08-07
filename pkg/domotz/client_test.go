@@ -98,7 +98,7 @@ func TestClient_AgentsReturnsEveryCollector(t *testing.T) {
 	// no notion of an "expired" collector to filter out here.
 	body := `[
 		{"id":1,"display_name":"Home","status":{"value":"ONLINE"}},
-		{"id":2,"display_name":"CasaTondo","status":{"value":"OFFLINE"}}
+		{"id":2,"display_name":"Branch Office","status":{"value":"OFFLINE"}}
 	]`
 	api := newFakeAPI(t, listHandler(t, body))
 
@@ -112,10 +112,12 @@ func TestClient_AgentsReturnsEveryCollector(t *testing.T) {
 }
 
 func TestClient_AgentsToleratesRealLicencePayload(t *testing.T) {
-	// Shape taken verbatim from the EU cell: no expiration_time anywhere.
-	body := `[{"id":200891,"display_name":"Home","status":{"value":"ONLINE",
+	// Shape mirrors what the EU cell returns - every field the licence block
+	// carries, and no expiration_time anywhere. The values are synthetic: a real
+	// licence code and the MAC it is bound to have no business in a public repo.
+	body := `[{"id":4242,"display_name":"Home","status":{"value":"ONLINE",
 		"last_change":"2026-08-03T19:21:28+00:00"},
-		"licence":{"id":191,"code":"A5F7-9D7D","bound_mac_address":"90:0E:B3:A2:EA:EE",
+		"licence":{"id":191,"code":"0000-0000","bound_mac_address":"00:00:5E:00:53:00",
 		"activation_time":"2016-08-17T16:30:35+00:00","type":"MONTHLY"}}]`
 	api := newFakeAPI(t, listHandler(t, body))
 
@@ -123,7 +125,7 @@ func TestClient_AgentsToleratesRealLicencePayload(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, agents, 1)
-	require.Equal(t, int64(200891), agents[0].ID)
+	require.Equal(t, int64(4242), agents[0].ID)
 }
 
 func TestClient_CachesMetadataAcrossCalls(t *testing.T) {
