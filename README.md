@@ -6,6 +6,12 @@ collector and device metrics, with full history.
 Built on the [Domotz Public API](https://portal.domotz.com/api). Your API key is
 stored encrypted on the Grafana server and never reaches the browser.
 
+![The starter dashboard: internet quality across three sites, and per-port traffic compared across
+switches](docs/dashboard.png)
+
+<sub>The bundled starter dashboard. Every panel is driven by the variables at the top, so the same
+dashboard works on any account without editing. Shown against demo data.</sub>
+
 > [!IMPORTANT]
 > **Beta.** This plugin is not yet in the Grafana plugin catalogue, so it is **unsigned** and
 > Grafana refuses to load unsigned plugins by default. You must allow it explicitly — see
