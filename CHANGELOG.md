@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-beta.4
 
 - Metrics can be compared across several devices, and across several collectors. Selecting more than
   one device used to empty the metric list and turn two panels red: a metric carries a different
