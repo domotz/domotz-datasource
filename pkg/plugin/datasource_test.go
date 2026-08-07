@@ -33,6 +33,10 @@ type stubAPI struct {
 	// emptyAccount answers /agent with [], as a key bound to no collectors does.
 	emptyAccount bool
 	failWith     int
+	// withForbiddenCollector adds a second collector to the listing that every
+	// subsequent call rejects with 403, as a shared collector the key was never
+	// granted does.
+	withForbiddenCollector bool
 }
 
 func newStubAPI(t *testing.T) *stubAPI {
@@ -46,6 +50,14 @@ func newStubAPI(t *testing.T) *stubAPI {
 		}
 
 		path := r.URL.Path
+
+		// Collector 8 is visible in the listing but unreadable, which is how
+		// the API presents a shared collector this key was not granted.
+		if s.withForbiddenCollector && strings.HasPrefix(path, "/agent/8/") {
+			http.Error(w, `{"error":"Operation not authorized"}`, http.StatusForbidden)
+			return
+		}
+
 		switch {
 		case path == "/user":
 			_, _ = w.Write([]byte(`{"id":1}`))
@@ -57,6 +69,13 @@ func newStubAPI(t *testing.T) *stubAPI {
 			s.agentRequests.Add(1)
 			if s.emptyAccount {
 				respondList(w, r, 0, `[]`)
+				return
+			}
+			if s.withForbiddenCollector {
+				respondList(w, r, 2, `[
+					{"id":7,"display_name":"Acme HQ"},
+					{"id":8,"display_name":"Shared Site"}
+				]`)
 				return
 			}
 			respondList(w, r, 1, `[{"id":7,"display_name":"Acme HQ","licence":{"expiration_time":null}}]`)
@@ -76,9 +95,12 @@ func newStubAPI(t *testing.T) *stubAPI {
 		// every device, and each entry carries the device it belongs to.
 		case path == "/agent/7/device/variable":
 			s.bulkVariableRequests.Add(1)
+			// Both devices expose the same metric under the same sensor path
+			// but different ids - the shape that makes an id-valued query
+			// unable to describe more than one device.
 			respondList(w, r, 2, `[
-				{"id":99,"device_id":11,"label":"Bandwidth","unit":"%","has_history":true},
-				{"id":100,"device_id":12,"label":"Bandwidth","unit":"%","has_history":true}
+				{"id":99,"device_id":11,"label":"Bandwidth","unit":"%","path":"snmp/if/bandwidth","has_history":true},
+				{"id":100,"device_id":12,"label":"Bandwidth","unit":"%","path":"snmp/if/bandwidth","has_history":true}
 			]`)
 
 		case path == "/agent/7/variable":
@@ -526,4 +548,65 @@ func TestResource_ReportsUsage(t *testing.T) {
 	var usage domotz.Usage
 	require.NoError(t, json.Unmarshal(body, &usage))
 	require.Equal(t, int64(100), usage.DailyLimit)
+}
+
+// The point of addressing a metric by path: one query, one series per device,
+// each resolved to that device's own variable id.
+func TestQueryData_SensorPathResolvesPerDevice(t *testing.T) {
+	api := newStubAPI(t)
+	api.historyBody = `[{"timestamp":"2026-08-04T10:00:00Z","value":"7"}]`
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(), rawQueryRequest(t, "A",
+		`{"scope":"device","agentId":7,"deviceId":"{11,12}","variableId":"snmp/if/bandwidth"}`))
+	require.NoError(t, err)
+
+	res := resp.Responses["A"]
+	require.NoError(t, res.Error)
+	require.Len(t, res.Frames, 2, "one series per selected device")
+	require.EqualValues(t, 2, api.historyRequests.Load(),
+		"each device's own variable id is fetched, not one id twice")
+
+	// Both series carry the same metric name; the device is what tells them
+	// apart, and it has to reach the legend.
+	devices := []string{
+		res.Frames[0].Fields[1].Labels["device"],
+		res.Frames[1].Fields[1].Labels["device"],
+	}
+	require.ElementsMatch(t, []string{"Core Switch", "Edge AP"}, devices)
+	require.ElementsMatch(t,
+		[]string{"Acme HQ - Core Switch: Bandwidth", "Acme HQ - Edge AP: Bandwidth"},
+		[]string{res.Frames[0].Fields[1].Config.DisplayNameFromDS, res.Frames[1].Fields[1].Config.DisplayNameFromDS})
+}
+
+// A shared collector the key cannot read is a fact about this caller, not a
+// failure: it must drop out of the fan-out rather than blanking a panel that is
+// charting the collectors the key *can* read.
+func TestQueryData_ForbiddenCollectorIsSkippedNotFatal(t *testing.T) {
+	api := newStubAPI(t)
+	api.withForbiddenCollector = true
+	api.historyBody = `[{"timestamp":"2026-08-04T10:00:00Z","value":"7"}]`
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(), rawQueryRequest(t, "A",
+		`{"scope":"device","agentId":"{7,8}","deviceId":"{11,12}","variableId":"snmp/if/bandwidth"}`))
+	require.NoError(t, err)
+
+	res := resp.Responses["A"]
+	require.NoError(t, res.Error, "one unreadable collector must not fail the query")
+	require.Len(t, res.Frames, 2, "only the readable collector's devices are drawn")
+}
+
+// 401 is the key itself being wrong. Drawing nothing quietly would hide it, so
+// unlike 403 it still fails the query.
+func TestQueryData_UnauthorizedRemainsFatalInAFanOut(t *testing.T) {
+	api := newStubAPI(t)
+	api.failWith = http.StatusUnauthorized
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(), rawQueryRequest(t, "A",
+		`{"scope":"device","agentId":7,"deviceId":"{11,12}","variableId":"snmp/if/bandwidth"}`))
+	require.NoError(t, err)
+
+	require.Error(t, resp.Responses["A"].Error)
 }

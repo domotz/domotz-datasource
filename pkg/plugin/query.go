@@ -33,16 +33,43 @@ type QueryModel struct {
 	AgentID    ID    `json:"agentId"`
 	DeviceID   ID    `json:"deviceId"`
 	VariableID ID    `json:"variableId"`
+
+	// VariablePath addresses a metric by its sensor path rather than its id, so
+	// one query can name the same metric on several devices.
+	//
+	// A metric has a different variable id on every device that exposes it -
+	// ifNumber is 9489154 on one device and 17516866 on another - so an id can
+	// only ever mean one device. The path is what they share
+	// ("device_oid_sensor/oid/1.3.6.1.2.1.2.1.0/data"), which is why comparing a
+	// metric across devices has to be expressed this way.
+	//
+	// Set instead of VariableID, never as well as. resolveSeriesContext turns it
+	// into the concrete variable for the device being queried.
+	VariablePath string `json:"variablePath,omitempty"`
 }
 
-// maxSeriesPerQuery caps how many series one query may expand into.
+// maxSeriesPerQuery caps how many series one query may actually draw.
 //
 // Each series costs one history request, and the API key allows 5 concurrent
 // requests (GET /meta/usage reports concurrent_allowed). The cap stops a stray
 // "Include All" on a large dimension from turning one panel into hundreds of
 // queued requests, and a panel carrying twenty overlaid series is already past
 // the point of being readable.
+//
+// Enforced against the combinations that exist upstream, not against the
+// product - see maxCombinations.
 const maxSeriesPerQuery = 20
+
+// maxCombinations bounds the product before anything is looked up.
+//
+// Most of a multi-collector product cannot exist: a device belongs to exactly
+// one collector, so selecting four collectors and three devices describes
+// twelve pairs of which three are real. Counting the product against
+// maxSeriesPerQuery would reject ordinary selections that draw a handful of
+// series, so the product only has to stay small enough that resolving it is
+// cheap. Resolution is served from cache and costs no upstream calls; the
+// history requests that do cost something are governed by maxSeriesPerQuery.
+const maxCombinations = 500
 
 // ID is a single entity identifier that tolerates both JSON numbers and numeric
 // strings.
@@ -175,13 +202,115 @@ func (l IDList) orZero() []int64 {
 	return l
 }
 
+// RefList is one or more variable references: either numeric ids, or sensor
+// paths naming a metric that several devices share.
+//
+// Kept as strings so both forms survive decoding; ExpandQueryModel classifies
+// each token. Paths are matched verbatim, so a path containing a comma cannot
+// be carried by a multi-value variable - Grafana's own glob encoding
+// ("{a,b}") has no way to escape one. No path in the wild uses commas.
+type RefList []string
+
+func (l *RefList) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	switch trimmed {
+	case "", "null", `""`:
+		*l = nil
+		return nil
+	}
+
+	if trimmed[0] == '[' {
+		var items []json.RawMessage
+		if err := json.Unmarshal(data, &items); err != nil {
+			return err
+		}
+		refs := make(RefList, 0, len(items))
+		for _, item := range items {
+			var one RefList
+			if err := one.UnmarshalJSON(item); err != nil {
+				return err
+			}
+			refs = append(refs, one...)
+		}
+		*l = refs
+		return nil
+	}
+
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		refs, err := parseRefString(s)
+		if err != nil {
+			return err
+		}
+		*l = refs
+		return nil
+	}
+
+	var n int64
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*l = RefList{strconv.FormatInt(n, 10)}
+	return nil
+}
+
+// parseRefString splits an interpolated variable the same way parseIDString
+// does, but keeps non-numeric tokens instead of rejecting them: a metric may
+// now be addressed by path.
+//
+// An uninterpolated variable still has to be caught here. It is the one
+// non-numeric string that is definitely not a path, and letting it through
+// would turn a dashboard wiring mistake into an empty panel with no
+// explanation.
+func parseRefString(s string) (RefList, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if s == "$__all" {
+		return nil, fmt.Errorf(`%q is the "Include All" placeholder rather than a value; `+
+			`give the variable a custom All value, or select specific values`, s)
+	}
+
+	body := s
+	if strings.HasPrefix(body, "{") && strings.HasSuffix(body, "}") {
+		body = body[1 : len(body)-1]
+	}
+
+	fields := strings.Split(body, ",")
+	refs := make(RefList, 0, len(fields))
+	for _, field := range fields {
+		field = strings.Trim(strings.TrimSpace(field), `"`)
+		if field == "" {
+			continue
+		}
+		if strings.HasPrefix(field, "$") {
+			return nil, fmt.Errorf("expected a variable id or sensor path, got %q "+
+				"(an uninterpolated dashboard variable will look like this)", s)
+		}
+		refs = append(refs, field)
+	}
+	return refs, nil
+}
+
+// orEmpty mirrors IDList.orZero for references.
+func (l RefList) orEmpty() []string {
+	if len(l) == 0 {
+		return []string{""}
+	}
+	return l
+}
+
 // queryModelRaw is the wire form of a query, before multi-value variables are
 // expanded into individual series.
 type queryModelRaw struct {
-	Scope      Scope  `json:"scope"`
-	AgentID    IDList `json:"agentId"`
-	DeviceID   IDList `json:"deviceId"`
-	VariableID IDList `json:"variableId"`
+	Scope      Scope   `json:"scope"`
+	AgentID    IDList  `json:"agentId"`
+	DeviceID   IDList  `json:"deviceId"`
+	VariableID RefList `json:"variableId"`
 }
 
 // ExpandQueryModel decodes a panel query into one QueryModel per series.
@@ -199,13 +328,13 @@ func ExpandQueryModel(raw json.RawMessage) ([]QueryModel, error) {
 		return nil, fmt.Errorf("malformed query: %w", err)
 	}
 
-	agents, devices, variables := rm.AgentID.orZero(), rm.DeviceID.orZero(), rm.VariableID.orZero()
+	agents, devices, variables := rm.AgentID.orZero(), rm.DeviceID.orZero(), rm.VariableID.orEmpty()
 
 	total := len(agents) * len(devices) * len(variables)
-	if total > maxSeriesPerQuery {
-		return nil, fmt.Errorf("this query expands to %d series, above the limit of %d; "+
+	if total > maxCombinations {
+		return nil, fmt.Errorf("this query describes %d combinations, above the limit of %d; "+
 			"narrow the multi-value variables it uses, or split it across panels",
-			total, maxSeriesPerQuery)
+			total, maxCombinations)
 	}
 
 	models := make([]QueryModel, 0, total)
@@ -213,10 +342,16 @@ func ExpandQueryModel(raw json.RawMessage) ([]QueryModel, error) {
 		for _, device := range devices {
 			for _, variable := range variables {
 				qm := QueryModel{
-					Scope:      rm.Scope,
-					AgentID:    ID(agent),
-					DeviceID:   ID(device),
-					VariableID: ID(variable),
+					Scope:    rm.Scope,
+					AgentID:  ID(agent),
+					DeviceID: ID(device),
+				}
+				// A numeric reference is a variable id; anything else is a
+				// sensor path, resolved per device once metadata is in hand.
+				if n, err := strconv.ParseInt(variable, 10, 64); err == nil {
+					qm.VariableID = ID(n)
+				} else {
+					qm.VariablePath = variable
 				}
 				if err := qm.Validate(); err != nil {
 					return nil, err
@@ -261,7 +396,7 @@ func (q QueryModel) Validate() error {
 	if q.Scope == ScopeDevice && q.DeviceID <= 0 {
 		return fmt.Errorf("a device must be selected")
 	}
-	if q.VariableID <= 0 {
+	if q.VariableID <= 0 && q.VariablePath == "" {
 		return fmt.Errorf("a variable must be selected")
 	}
 	return nil

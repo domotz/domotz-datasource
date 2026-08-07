@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Metrics can be compared across several devices, and across several collectors. Selecting more than
+  one device used to empty the metric list and turn two panels red: a metric carries a different
+  identifier on every device that exposes it, so no single identifier could describe them all.
+  Metrics are now addressed by sensor path, which is what they share, and the backend resolves it to
+  the right identifier per device.
+- The collector variable accepts several sites, and collector metrics work the same way.
+- Dashboard variable dropdowns show what the query editor shows: a device reads
+  `Name · IP · MAC` and a collector `Name · STATUS`, in both places, and both are searchable on
+  every part.
+- A collector the API key cannot read is skipped instead of blanking the panel. Shared collectors
+  appear in the account listing but are not always readable, and one of them used to fail every
+  series in the query.
+- The series limit counts series that are actually drawn rather than combinations described. Four
+  collectors and three devices describe twelve pairs but draw three, and the old count rejected
+  ordinary selections.
+- A panel whose variable resolves to nothing reads as no data instead of `a variable must be
+  selected` in red.
+
 ## 1.0.0-beta.3
 
 No functional change. This release exists to prove the automated build: the release workflow was

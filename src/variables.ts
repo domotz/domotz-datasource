@@ -2,7 +2,7 @@ import { CustomVariableSupport, DataQueryRequest, DataQueryResponse, MetricFindV
 import { Observable, from } from 'rxjs';
 
 import type { DataSource } from './datasource';
-import { deviceOption, variableOptions } from './labels';
+import { collectorOption, deviceOption, flattenOption, variableOptions } from './labels';
 import { DomotzVariableQuery, Variable, VariableKind } from './types';
 import { VariableQueryEditor } from './components/VariableQueryEditor';
 
@@ -53,24 +53,32 @@ export class DomotzVariableSupport extends CustomVariableSupport<DataSource, Dom
     switch (query.kind) {
       case VariableKind.Collectors: {
         const collectors = await this.datasource.getCollectors();
-        return collectors.map((c) => ({ text: c.display_name, value: String(c.id) }));
+        return collectors.map((c) => ({ text: flattenOption(collectorOption(c)), value: String(c.id) }));
       }
 
       case VariableKind.Devices: {
-        const devices = await this.datasource.getDevices(agentId);
-        // Same label as the query editor, so a device reads the same wherever
-        // it appears. The address stays out of it: a variable dropdown has no
-        // second line to put it on, and Grafana matches its regex against the
-        // value, so nothing is gained by lengthening the text.
-        return devices.map((d) => ({ text: deviceOption(d).label ?? String(d.id), value: String(d.id) }));
+        // Several collectors may be selected: a device list that spans sites is
+        // what makes a multi-site dashboard possible at all.
+        const devices = await this.datasource.getDevicesForCollectors(agentId);
+        // The editor's two lines, folded into the one line a variable dropdown
+        // shows - so a device reads the same in the header bar as in the query
+        // editor, and stays findable by address there too.
+        return devices.map((d) => ({ text: flattenOption(deviceOption(d)), value: String(d.id) }));
       }
 
       case VariableKind.CollectorVariables: {
-        return asMetrics(await this.datasource.getCollectorVariables(agentId, HISTORY_ONLY));
+        // By path, for the same reason device metrics are: every collector
+        // measures Download under its own variable id, and only the path is
+        // common to all of them.
+        const variables = await this.datasource.getSharedCollectorVariables(agentId, HISTORY_ONLY);
+        return asPathMetrics(variables);
       }
 
       case VariableKind.DeviceVariables: {
-        return asMetrics(await this.datasource.getDeviceVariables(agentId, deviceId, HISTORY_ONLY));
+        // Addressed by sensor path, not id: the same metric carries a different
+        // id on every device, so an id-valued variable can only ever describe
+        // one of the selected devices. The path is what they share.
+        return asPathMetrics(await this.datasource.getSharedDeviceVariables(agentId, deviceId, HISTORY_ONLY));
       }
 
       default:
@@ -80,14 +88,22 @@ export class DomotzVariableSupport extends CustomVariableSupport<DataSource, Dom
 }
 
 /**
- * Metric options for a variable dropdown, disambiguated the same way the query
- * editor does it.
+ * Metric options carrying the sensor path as their value.
  *
- * Without this a collector's TCP-service sensors all resolve to the same label
- * - one real account lists `443` five times - and the dropdown offers five
- * identical entries with no way to tell them apart. The dropdown has no second
- * line, so the disambiguating path has to go in the text.
+ * Labels are disambiguated the same way the query editor does it: without that
+ * a collector's TCP-service sensors all resolve to the same label - one real
+ * account lists `443` five times - and the dropdown offers five identical
+ * entries with no way to tell them apart. The dropdown has no second line, so
+ * the disambiguating path has to go in the text.
+ *
+ * The live reading that the query editor shows on its second line is
+ * deliberately left out: variable options are cached and refreshed on the
+ * dashboard's own schedule, so a value baked into the text would sooner or
+ * later be a number that is no longer true.
  */
-function asMetrics(variables: Variable[]): MetricFindValue[] {
-  return variableOptions(variables).map((o) => ({ text: o.label ?? o.value, value: o.value }));
+function asPathMetrics(variables: Variable[]): MetricFindValue[] {
+  return variableOptions(
+    variables.filter((v) => v.path),
+    (v) => v.path
+  ).map((o) => ({ text: o.label ?? o.value, value: o.value }));
 }

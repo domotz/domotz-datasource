@@ -30,7 +30,7 @@
       {
         "name": "collector",
         "label": "Collector",
-        "description": "Which site to look at.",
+        "description": "Sites to chart. Select several to compare the same metric across them.",
         "type": "query",
         "datasource": {
           "type": "domotz-datasource",
@@ -43,7 +43,7 @@
         "refresh": 1,
         "sort": 0,
         "includeAll": false,
-        "multi": false,
+        "multi": true,
         "hide": 0,
         "current": {},
         "options": []
@@ -134,7 +134,7 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "$collector \u00b7 $collectorMetric",
+      "title": "${collectorMetric:text}",
       "datasource": {
         "type": "domotz-datasource",
         "uid": "${datasource}"
@@ -216,7 +216,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "$device \u00b7 $deviceMetric",
+      "title": "${deviceMetric:text}",
       "datasource": {
         "type": "domotz-datasource",
         "uid": "${datasource}"
@@ -298,7 +298,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "$deviceMetric across selected devices",
+      "title": "${deviceMetric:text} across selected devices",
       "datasource": {
         "type": "domotz-datasource",
         "uid": "${datasource}"
@@ -382,11 +382,11 @@
         "x": 0,
         "y": 30,
         "w": 24,
-        "h": 7
+        "h": 11
       },
       "options": {
         "mode": "markdown",
-        "content": "This dashboard hardcodes nothing \u2014 every panel is driven by the variables at the top, so it works\nagainst any Domotz account.\n\n1. **Collector** \u2014 pick a site.\n2. **Collector metric** \u2014 internet quality and other collector-level metrics (Download, Upload,\n   Latency, Jitter, Packet Loss, Bufferbloat \u2026). Select several; each becomes its own panel.\n3. **Device** and **Device metric** \u2014 the same for a device. Selecting several devices overlays\n   them on the *Compare devices* panel.\n\nMetric identifiers are per-collector, so a dashboard cannot pin a metric by name across accounts.\nOnce you have the panels you want, save a copy \u2014 your selections are stored with it."
+        "content": "This dashboard hardcodes nothing — every panel is driven by the variables at the top, so it works\nagainst any Domotz account.\n\n1. **Collector** — pick one site, or several to compare them.\n2. **Collector metric** — internet quality and other collector-level metrics (Download, Upload,\n   Latency, Jitter, Packet Loss, Bufferbloat …). Select several; each becomes its own panel.\n3. **Device** and **Device metric** — the same for devices, across every selected site. The\n   *Compare devices* panel overlays the same metric from each of them.\n\nA metric carries a different identifier on every collector and device that exposes it, so metrics\nare addressed by sensor path instead — that is what lets one selection mean “ifNumber, on whichever\nof these devices has it”. Anything without that metric simply contributes no series, so mixing\nunlike devices is harmless.\n\nOnce you have the panels you want, save a copy — your selections are stored with it."
       }
     }
   ]

@@ -1,6 +1,6 @@
 import { ComboboxOption } from '@grafana/ui';
 
-import { Device, Variable } from './types';
+import { Collector, Device, Variable } from './types';
 
 /**
  * The one separator used for every compound label and description in the
@@ -46,6 +46,35 @@ export function filterOptions<T extends ComboboxOption<string>>(options: T[], in
  * the label costs nothing in findability and makes a list of a hundred devices
  * scannable.
  */
+/**
+ * Collector picker option: the site name, with its online state on the second
+ * line.
+ *
+ * Shared with the query editor so a collector reads the same in both places.
+ */
+export function collectorOption(collector: Collector): ComboboxOption<string> {
+  return {
+    label: collector.display_name || `Collector ${collector.id}`,
+    value: String(collector.id),
+    description: collector.status?.value,
+  };
+}
+
+/**
+ * Flattens a two-line picker option into the single line a dashboard variable
+ * dropdown can show.
+ *
+ * Grafana's variable picker renders only the option text - there is no second
+ * line to put an address or a status on - so the two lines are joined with the
+ * same separator the editor uses. That keeps a device reading identically in
+ * the header bar and in the query editor, and since the picker filters on the
+ * text it displays, folding the address in is also what makes it searchable
+ * there.
+ */
+export function flattenOption(option: ComboboxOption<string>): string {
+  return join(option.label ?? option.value, option.description);
+}
+
 export function deviceOption(device: Device): ComboboxOption<string> {
   const name = device.display_name?.trim() || `Device ${device.id}`;
   const ip = device.ip_addresses?.[0];
@@ -72,7 +101,15 @@ export function deviceOption(device: Device): ComboboxOption<string> {
  * its path on the second line regardless, and that line is searchable, so the
  * label does not have to grow just to make the path findable.
  */
-export function variableOptions(variables: Variable[]): Array<ComboboxOption<string>> {
+export function variableOptions(
+  variables: Variable[],
+  /**
+   * What the option carries as its value. Defaults to the variable id, which is
+   * what a query editor field holds. Template variables pass the sensor path
+   * instead, so one option can address the metric on several devices.
+   */
+  valueOf: (v: Variable) => string = (v) => String(v.id)
+): Array<ComboboxOption<string>> {
   const counts = new Map<string, number>();
   for (const v of variables) {
     counts.set(v.displayLabel, (counts.get(v.displayLabel) ?? 0) + 1);
@@ -82,7 +119,7 @@ export function variableOptions(variables: Variable[]): Array<ComboboxOption<str
     const ambiguous = (counts.get(v.displayLabel) ?? 0) > 1;
     return {
       label: ambiguous ? join(v.displayLabel, shortPath(v.path)) : v.displayLabel,
-      value: String(v.id),
+      value: valueOf(v),
       description: describeVariable(v),
     };
   });

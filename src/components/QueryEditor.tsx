@@ -13,7 +13,7 @@ import {
 
 import { DataSource } from '../datasource';
 import { errorText } from '../errors';
-import { deviceOption, filterOptions, variableOptions as buildVariableOptions } from '../labels';
+import { collectorOption, deviceOption, filterOptions, variableOptions as buildVariableOptions } from '../labels';
 import { DomotzDataSourceOptions, DomotzQuery, Scope, Variable } from '../types';
 
 type Props = QueryEditorProps<DataSource, DomotzQuery, DomotzDataSourceOptions>;
@@ -90,13 +90,7 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
     let cancelled = false;
     setLoading((s) => ({ ...s, collectors: true }));
 
-    const request = datasource.getCollectors().then((list) =>
-      list.map((c) => ({
-        label: c.display_name || `Collector ${c.id}`,
-        value: String(c.id),
-        description: c.status?.value,
-      }))
-    );
+    const request = datasource.getCollectors().then((list) => list.map(collectorOption));
     pending.current.collectors = request.catch(() => []);
 
     request

@@ -338,8 +338,8 @@ func TestExpandQueryModel_CombinesSeveralMultiValueFields(t *testing.T) {
 	require.Len(t, models, 4, "the expansion is the product of the multi-value fields")
 }
 
-func TestExpandQueryModel_RejectsExpansionsAboveTheSeriesCap(t *testing.T) {
-	ids := make([]string, maxSeriesPerQuery+1)
+func TestExpandQueryModel_RejectsExpansionsAboveTheCombinationCeiling(t *testing.T) {
+	ids := make([]string, maxCombinations+1)
 	for i := range ids {
 		ids[i] = strconv.Itoa(i + 1)
 	}
@@ -347,8 +347,30 @@ func TestExpandQueryModel_RejectsExpansionsAboveTheSeriesCap(t *testing.T) {
 
 	_, err := ExpandQueryModel(raw)
 
-	require.ErrorContains(t, err, "expands to 21 series")
-	require.ErrorContains(t, err, "limit of 20")
+	require.ErrorContains(t, err, "describes 501 combinations")
+	require.ErrorContains(t, err, "limit of 500")
+}
+
+// The series cap is deliberately NOT applied here. A multi-collector selection
+// describes far more pairs than can exist - a device belongs to exactly one
+// collector - so counting the product against it would reject a selection that
+// draws three series. Only combinations that resolve to something real are
+// charged against maxSeriesPerQuery, which multiSeries enforces once metadata
+// is in hand.
+func TestExpandQueryModel_DoesNotChargeImpossiblePairsAgainstTheSeriesCap(t *testing.T) {
+	collectors := make([]string, 5)
+	devices := make([]string, 5)
+	for i := range collectors {
+		collectors[i] = strconv.Itoa(i + 1)
+		devices[i] = strconv.Itoa(100 + i)
+	}
+	raw := []byte(`{"scope":"device","agentId":"{` + strings.Join(collectors, ",") + `}",` +
+		`"deviceId":"{` + strings.Join(devices, ",") + `}","variableId":99}`)
+
+	models, err := ExpandQueryModel(raw)
+
+	require.NoError(t, err, "25 pairs describe at most 5 real series")
+	require.Len(t, models, 25)
 }
 
 // "Include All" with no custom all-value leaks the placeholder itself. The two
@@ -366,4 +388,44 @@ func TestExpandQueryModel_SingleValueYieldsExactlyOneSeries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, models, 1)
 	require.Equal(t, ID(0), models[0].DeviceID)
+}
+
+// The path form is what makes "this metric, on these devices" expressible: a
+// metric has a different variable id on every device that exposes it, so an
+// id-valued query can only ever describe one of them.
+func TestExpandQueryModel_AcceptsSensorPathsAsVariableReferences(t *testing.T) {
+	const path = "device_oid_sensor/oid/1.3.6.1.2.1.2.1.0/data"
+
+	models, err := ExpandQueryModel(
+		[]byte(`{"scope":"device","agentId":7,"deviceId":"{11,12}","variableId":"` + path + `"}`))
+
+	require.NoError(t, err)
+	require.Len(t, models, 2, "one series per selected device")
+	for i, qm := range models {
+		require.Equal(t, path, qm.VariablePath, "series %d", i)
+		require.Zero(t, qm.VariableID, "a path carries no id until it is resolved per device")
+		require.NoError(t, qm.Validate(), "a path alone is a complete query")
+	}
+	require.Equal(t, []ID{11, 12}, []ID{models[0].DeviceID, models[1].DeviceID})
+}
+
+func TestExpandQueryModel_StillTreatsNumericReferencesAsIds(t *testing.T) {
+	models, err := ExpandQueryModel(
+		[]byte(`{"scope":"device","agentId":7,"deviceId":11,"variableId":"99"}`))
+
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	require.Equal(t, ID(99), models[0].VariableID)
+	require.Empty(t, models[0].VariablePath, "a numeric reference must not be mistaken for a path")
+}
+
+// An uninterpolated variable is the one non-numeric string that is definitely
+// not a sensor path. Accepting it would turn a dashboard wiring mistake into an
+// empty panel with nothing to explain it.
+func TestExpandQueryModel_RejectsUninterpolatedVariableAsPath(t *testing.T) {
+	_, err := ExpandQueryModel(
+		[]byte(`{"scope":"device","agentId":7,"deviceId":11,"variableId":"$deviceMetric"}`))
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "uninterpolated")
 }

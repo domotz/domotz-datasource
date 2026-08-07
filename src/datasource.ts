@@ -48,12 +48,23 @@ export class DataSource extends DataSourceWithBackend<DomotzQuery, DomotzDataSou
     return !this.hasUnresolvedVariable(query);
   }
 
-  /** True when any identifier still contains a template variable reference. */
+  /**
+   * True when any identifier still contains a template variable reference, or
+   * refers to a variable that currently resolves to nothing.
+   *
+   * The empty case is not hypothetical: a multi-value variable whose own query
+   * returned no options interpolates to "" rather than being left as the
+   * literal "$deviceMetric", so a `$`-check alone lets the query through and the
+   * backend answers `a variable must be selected` in red. Selecting several
+   * devices used to do exactly that. Nothing has been chosen yet, so the honest
+   * rendering is no data.
+   */
   private hasUnresolvedVariable(query: DomotzQuery): boolean {
     const srv = getTemplateSrv();
-    return [query.agentId, query.deviceId, query.variableId]
-      .filter(Boolean)
-      .some((raw) => srv.replace(raw!).includes('$'));
+    return [query.agentId, query.deviceId, query.variableId].filter(Boolean).some((raw) => {
+      const interpolated = srv.replace(raw!).trim();
+      return interpolated === '' || interpolated.includes('$');
+    });
   }
 
   applyTemplateVariables(query: DomotzQuery, scopedVars: ScopedVars): DomotzQuery {
@@ -83,11 +94,31 @@ export class DataSource extends DataSourceWithBackend<DomotzQuery, DomotzDataSou
    * request: an empty list beats a request the backend can only reject.
    */
   private resolveId(raw: string | undefined): string | undefined {
+    const ids = this.resolveIds(raw);
+    return ids.length === 1 ? ids[0] : undefined;
+  }
+
+  /**
+   * Resolve a field that may hold a multi-value template variable into every id
+   * it names.
+   *
+   * Grafana renders a multi-value variable as a glob - `{71,72}` - which
+   * `resolveId` rejects, since one lookup path needs exactly one id. A device
+   * metric list does not: several devices can be selected at once, and the
+   * metrics worth offering are the ones they share.
+   */
+  private resolveIds(raw: string | undefined): string[] {
     if (!raw) {
-      return undefined;
+      return [];
     }
-    const interpolated = getTemplateSrv().replace(raw).trim();
-    return /^\d+$/.test(interpolated) ? interpolated : undefined;
+    let interpolated = getTemplateSrv().replace(raw).trim();
+    if (interpolated.startsWith('{') && interpolated.endsWith('}')) {
+      interpolated = interpolated.slice(1, -1);
+    }
+    return interpolated
+      .split(',')
+      .map((part) => part.trim().replace(/^"|"$/g, ''))
+      .filter((part) => /^\d+$/.test(part));
   }
 
   getCollectors(): Promise<Collector[]> {
@@ -100,6 +131,24 @@ export class DataSource extends DataSourceWithBackend<DomotzQuery, DomotzDataSou
       return Promise.resolve([]);
     }
     return this.getResource(`collectors/${collector}/devices`);
+  }
+
+  /**
+   * Devices belonging to any of several collectors.
+   *
+   * Fans out rather than adding a route: device ids are unique across
+   * collectors so there is nothing to merge or de-duplicate, and each per
+   * collector call is already cached in the backend.
+   */
+  async getDevicesForCollectors(collectorIds: string | undefined): Promise<Device[]> {
+    const collectors = this.resolveIds(collectorIds);
+    if (collectors.length === 0) {
+      return [];
+    }
+    const lists = await Promise.all(
+      collectors.map((id) => this.getResource(`collectors/${id}/devices`) as Promise<Device[]>)
+    );
+    return lists.flat();
   }
 
   /**
@@ -126,6 +175,64 @@ export class DataSource extends DataSourceWithBackend<DomotzQuery, DomotzDataSou
       return Promise.resolve([]);
     }
     return this.getResource(`collectors/${collector}/devices/${device}/variables?hasHistory=${historyOnly}`);
+  }
+
+  /**
+   * Metrics exposed by a set of devices, listed once each by sensor path.
+   *
+   * Backs the device-metric template variable, which is the one place several
+   * devices can be in play at once. Selecting the returned path addresses the
+   * metric on whichever of those devices actually has it - a variable id could
+   * only ever mean one of them, which is why picking "ifNumber" for three
+   * devices used to be impossible.
+   */
+  /**
+   * Collector metrics across several collectors, listed once each by path.
+   *
+   * The collector-level counterpart of getSharedDeviceVariables: every site
+   * measures Download and Latency, each under its own variable id, so the path
+   * is what lets one selection mean "this measurement, at all these sites".
+   */
+  getSharedCollectorVariables(collectorIds: string | undefined, historyOnly = false): Promise<Variable[]> {
+    const collectors = this.resolveIds(collectorIds);
+    if (collectors.length === 0) {
+      return Promise.resolve([]);
+    }
+    return this.getResource(`shared-collector-variables?hasHistory=${historyOnly}&collectors=${collectors.join(',')}`);
+  }
+
+  async getSharedDeviceVariables(
+    collectorIds: string | undefined,
+    deviceIds: string | undefined,
+    historyOnly = false
+  ): Promise<Variable[]> {
+    const collectors = this.resolveIds(collectorIds);
+    const devices = this.resolveIds(deviceIds);
+    if (collectors.length === 0 || devices.length === 0) {
+      return [];
+    }
+
+    // Each collector sweeps its own devices; a device id belonging to another
+    // collector simply matches nothing there.
+    const lists = await Promise.all(
+      collectors.map(
+        (id) =>
+          this.getResource(
+            `collectors/${id}/shared-variables?hasHistory=${historyOnly}&devices=${devices.join(',')}`
+          ) as Promise<Variable[]>
+      )
+    );
+
+    // The backend de-duplicates within a collector; across collectors is this
+    // side's job, and it is the same rule - one entry per sensor path.
+    const seen = new Set<string>();
+    return lists.flat().filter((v) => {
+      if (!v.path || seen.has(v.path)) {
+        return false;
+      }
+      seen.add(v.path);
+      return true;
+    });
   }
 
   getUsage(): Promise<Usage> {

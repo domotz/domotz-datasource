@@ -137,7 +137,16 @@ func (d *DomotzDatasource) singleSeries(ctx context.Context, refID string, qm Qu
 		return errorResponse(err, "resolving query metadata")
 	}
 
-	samples, err := d.client.VariableHistory(ctx, qm.AgentID.Int64(), qm.effectiveDeviceID(), qm.VariableID.Int64(), timeRange.From, timeRange.To)
+	// A path that matched nothing resolves to no id at all. There is no history
+	// to ask for, and asking anyway would address variable 0; render the same
+	// empty named series a retired sensor gets.
+	if sc.Variable.ID <= 0 {
+		var response backend.DataResponse
+		response.Frames = append(response.Frames, BuildFrame(refID, nil, sc, timeRange))
+		return response
+	}
+
+	samples, err := d.client.VariableHistory(ctx, qm.AgentID.Int64(), qm.effectiveDeviceID(), sc.Variable.ID, timeRange.From, timeRange.To)
 	if err != nil {
 		return errorResponse(err, "fetching variable history")
 	}
@@ -164,31 +173,84 @@ func (d *DomotzDatasource) multiSeries(ctx context.Context, refID string, models
 		stage string
 	}
 
-	results := make([]result, len(models))
+	// Resolve first, fetch second. Resolution is served from cache and costs no
+	// upstream calls, so it is what tells us which combinations are real before
+	// any history is requested - and the cap has to apply to those, not to the
+	// product. Four collectors and three devices describe twelve pairs and draw
+	// three series; charging the user for the nine impossible ones would reject
+	// ordinary selections.
+	type resolved struct {
+		qm QueryModel
+		sc SeriesContext
+	}
 
-	var wg sync.WaitGroup
+	type resolution struct {
+		out    *resolved
+		err    error
+		exists bool
+	}
+
+	resolutions := make([]resolution, len(models))
+
+	var resolveWG sync.WaitGroup
 	for i, qm := range models {
-		wg.Add(1)
+		resolveWG.Add(1)
 		go func(i int, qm QueryModel) {
-			defer wg.Done()
+			defer resolveWG.Done()
 
 			sc, exists, err := d.resolveSeriesContext(ctx, qm)
 			if err != nil {
-				results[i] = result{err: err, stage: "resolving query metadata"}
+				if isForbidden(err) {
+					// This key cannot see this collector. That is the same kind
+					// of fact as "this device is not on that collector" - the
+					// series does not exist for this caller - and one shared
+					// collector the key was never granted must not blank a
+					// panel that is charting nine others.
+					log.DefaultLogger.Warn("skipping series the API key may not read",
+						"agentId", qm.AgentID, "deviceId", qm.DeviceID)
+					return
+				}
+				resolutions[i] = resolution{err: err}
 				return
 			}
-			if !exists {
-				return
-			}
+			resolutions[i] = resolution{out: &resolved{qm: qm, sc: sc}, exists: exists}
+		}(i, qm)
+	}
+	resolveWG.Wait()
 
-			samples, err := d.client.VariableHistory(ctx, qm.AgentID.Int64(), qm.effectiveDeviceID(), qm.VariableID.Int64(), timeRange.From, timeRange.To)
+	real := make([]resolved, 0, len(models))
+	for _, r := range resolutions {
+		if r.err != nil {
+			return errorResponse(r.err, "resolving query metadata")
+		}
+		if r.exists && r.out.sc.Variable.ID > 0 {
+			real = append(real, *r.out)
+		}
+	}
+
+	if len(real) > maxSeriesPerQuery {
+		return backend.ErrDataResponse(backend.StatusBadRequest, fmt.Sprintf(
+			"this query draws %d series, above the limit of %d; "+
+				"narrow the multi-value variables it uses, or split it across panels",
+			len(real), maxSeriesPerQuery))
+	}
+
+	results := make([]result, len(real))
+
+	var wg sync.WaitGroup
+	for i, r := range real {
+		wg.Add(1)
+		go func(i int, r resolved) {
+			defer wg.Done()
+
+			samples, err := d.client.VariableHistory(ctx, r.qm.AgentID.Int64(), r.qm.effectiveDeviceID(), r.sc.Variable.ID, timeRange.From, timeRange.To)
 			if err != nil {
 				results[i] = result{err: err, stage: "fetching variable history"}
 				return
 			}
 
-			results[i] = result{frame: BuildFrame(refID, samples, sc, timeRange)}
-		}(i, qm)
+			results[i] = result{frame: BuildFrame(refID, samples, r.sc, timeRange)}
+		}(i, r)
 	}
 	wg.Wait()
 
@@ -274,11 +336,11 @@ func (d *DomotzDatasource) resolveSeriesContext(ctx context.Context, qm QueryMod
 	}
 
 	for _, v := range variables {
-		if v.ID != qm.VariableID.Int64() {
+		if !variableMatches(v, qm) {
 			continue
 		}
 		if qm.Scope == ScopeDevice && v.DeviceID != 0 && v.DeviceID != qm.DeviceID.Int64() {
-			// Right variable id, wrong device: this pair does not exist.
+			// Right variable, wrong device: this pair does not exist.
 			continue
 		}
 		sc.Variable = v
@@ -286,11 +348,36 @@ func (d *DomotzDatasource) resolveSeriesContext(ctx context.Context, qm QueryMod
 	}
 
 	// The variable is gone upstream, or never belonged to this device. Render an
-	// empty series named by its id instead of erroring.
+	// empty series named by whatever the query asked for instead of erroring.
 	log.DefaultLogger.Warn("variable not found",
-		"agentId", qm.AgentID, "deviceId", qm.DeviceID, "variableId", qm.VariableID)
-	sc.Variable = domotz.Variable{ID: qm.VariableID.Int64(), HasHistory: true}
+		"agentId", qm.AgentID, "deviceId", qm.DeviceID,
+		"variableId", qm.VariableID, "variablePath", qm.VariablePath)
+	sc.Variable = domotz.Variable{ID: qm.VariableID.Int64(), Path: qm.VariablePath, HasHistory: true}
 	return sc, false, nil
+}
+
+// isForbidden reports whether an error is the API refusing access to one
+// entity, as opposed to refusing the key outright.
+//
+// 403 is per collector: shared and collaboration collectors appear in the
+// account's own listing but are not readable with every key. 401 stays fatal -
+// that is the key itself being wrong, and quietly drawing nothing would hide
+// it.
+func isForbidden(err error) bool {
+	var apiErr *domotz.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden
+}
+
+// variableMatches reports whether an upstream variable is the one a query asked
+// for, by id or by sensor path.
+//
+// Path matching is what makes a metric addressable across devices: the caller
+// pairs it with a device, and the DeviceID check above keeps the match honest.
+func variableMatches(v domotz.Variable, qm QueryModel) bool {
+	if qm.VariablePath != "" {
+		return v.Path == qm.VariablePath
+	}
+	return v.ID == qm.VariableID.Int64()
 }
 
 // errorResponse maps a client error onto the Grafana status that matches the
