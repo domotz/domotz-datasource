@@ -9,6 +9,11 @@ on:
     branches:
       - master
       - main
+  # Manual trigger. During the Actions outage of 2026-08-06, webhook delivery was
+  # throttled to ~15% and the push events for two commits never created a run at
+  # all - with nothing queued there was nothing to re-run, and no way to ask for
+  # one. This is the escape hatch.
+  workflow_dispatch:
 
 permissions: read-all
 
