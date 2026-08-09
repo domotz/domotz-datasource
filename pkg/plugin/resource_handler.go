@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/domotz/domotz-datasource/pkg/domotz"
 	"github.com/gorilla/mux"
@@ -170,14 +172,42 @@ func (d *DomotzDatasource) handleSharedCollectorVariables(w http.ResponseWriter,
 		return
 	}
 
-	seen := map[string]bool{}
-	shared := make([]domotz.Variable, 0)
-	for _, id := range ids {
-		variables, err := d.client.AgentVariables(r.Context(), id, historyOnly(r))
+	// One request per collector, in parallel. Sequentially this is the slowest
+	// path in the plugin for exactly the account it exists to serve: an MSP
+	// selecting fifty sites would wait out fifty round trips before the metric
+	// dropdown filled in.
+	lists := make([][]domotz.Variable, len(ids))
+	errs := make([]error, len(ids))
+
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		go func(i int, id int64) {
+			defer wg.Done()
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.DefaultLogger.Error("recovered from panic listing collector variables",
+						"collectorId", id, "panic", fmt.Sprint(rec), "stack", string(debug.Stack()))
+					errs[i] = fmt.Errorf("internal error listing variables for collector %d", id)
+				}
+			}()
+			lists[i], errs[i] = d.client.AgentVariables(r.Context(), id, historyOnly(r))
+		}(i, id)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
 		if err != nil {
 			writeClientError(w, err)
 			return
 		}
+	}
+
+	// Merged in the order the caller asked for, so the dropdown does not
+	// reshuffle between refreshes.
+	seen := map[string]bool{}
+	shared := make([]domotz.Variable, 0)
+	for _, variables := range lists {
 		for _, v := range variables {
 			if v.Path == "" || seen[v.Path] {
 				continue

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"sync"
 
 	"github.com/domotz/domotz-datasource/pkg/domotz"
@@ -101,6 +102,13 @@ func (d *DomotzDatasource) QueryData(ctx context.Context, req *backend.QueryData
 		wg.Add(1)
 		go func(q backend.DataQuery) {
 			defer wg.Done()
+			defer func() {
+				if res, panicked := recovered(recover(), "query "+q.RefID); panicked {
+					mu.Lock()
+					response.Responses[q.RefID] = res
+					mu.Unlock()
+				}
+			}()
 
 			res := d.query(ctx, q)
 
@@ -112,6 +120,26 @@ func (d *DomotzDatasource) QueryData(ctx context.Context, req *backend.QueryData
 	wg.Wait()
 
 	return response, nil
+}
+
+// recovered turns a panic into a failed response for one query.
+//
+// The SDK installs a gRPC recovery interceptor, but it only guards the
+// goroutine serving the RPC. A panic on a goroutine this file spawns unwinds
+// past it and takes the whole plugin process down - and the process is shared
+// by every dashboard using this data source, so one bad series would blank all
+// of them until Grafana relaunched it. Nothing here is expected to panic; that
+// is exactly why an unguarded one would be so expensive.
+//
+// Returns false when there was no panic, so callers can ignore the result.
+func recovered(r any, what string) (backend.DataResponse, bool) {
+	if r == nil {
+		return backend.DataResponse{}, false
+	}
+	log.DefaultLogger.Error("recovered from panic",
+		"in", what, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+	return backend.ErrDataResponse(backend.StatusInternal,
+		fmt.Sprintf("the data source hit an internal error handling %s", what)), true
 }
 
 // query executes one panel query, which may resolve to several series.
@@ -132,15 +160,20 @@ func (d *DomotzDatasource) query(ctx context.Context, q backend.DataQuery) backe
 // singleSeries runs an ordinary one-series query, where any failure is the
 // panel's answer and a retired variable still yields an empty named series.
 func (d *DomotzDatasource) singleSeries(ctx context.Context, refID string, qm QueryModel, timeRange TimeRange) backend.DataResponse {
-	sc, _, err := d.resolveSeriesContext(ctx, qm)
+	sc, exists, err := d.resolveSeriesContext(ctx, qm)
 	if err != nil {
 		return errorResponse(err, "resolving query metadata")
 	}
 
-	// A path that matched nothing resolves to no id at all. There is no history
-	// to ask for, and asking anyway would address variable 0; render the same
-	// empty named series a retired sensor gets.
-	if sc.Variable.ID <= 0 {
+	// Nothing upstream matches this query, so there is no history to ask for.
+	//
+	// Asking anyway is not harmless: the API answers history for an unknown
+	// variable id with 403 on the device route and 503 on the collector one,
+	// neither of which is an empty list, so a panel pinned to a sensor that has
+	// since been removed would show a fetch error. Gating on the id alone
+	// caught only the path-addressed case, because the not-found fallback keeps
+	// the requested numeric id.
+	if !exists || sc.Variable.ID <= 0 {
 		var response backend.DataResponse
 		response.Frames = append(response.Frames, BuildFrame(refID, nil, sc, timeRange))
 		return response
@@ -197,6 +230,12 @@ func (d *DomotzDatasource) multiSeries(ctx context.Context, refID string, models
 		resolveWG.Add(1)
 		go func(i int, qm QueryModel) {
 			defer resolveWG.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					_, _ = recovered(r, "metadata resolution")
+					resolutions[i] = resolution{err: fmt.Errorf("internal error resolving series metadata")}
+				}
+			}()
 
 			sc, exists, err := d.resolveSeriesContext(ctx, qm)
 			if err != nil {
@@ -242,6 +281,12 @@ func (d *DomotzDatasource) multiSeries(ctx context.Context, refID string, models
 		wg.Add(1)
 		go func(i int, r resolved) {
 			defer wg.Done()
+			defer func() {
+				if rec := recover(); rec != nil {
+					_, _ = recovered(rec, "series build")
+					results[i] = result{err: fmt.Errorf("internal error building series"), stage: "building series"}
+				}
+			}()
 
 			samples, err := d.client.VariableHistory(ctx, r.qm.AgentID.Int64(), r.qm.effectiveDeviceID(), r.sc.Variable.ID, timeRange.From, timeRange.To)
 			if err != nil {
@@ -344,6 +389,17 @@ func (d *DomotzDatasource) resolveSeriesContext(ctx context.Context, qm QueryMod
 			continue
 		}
 		sc.Variable = v
+
+		// The variable listing says this device has this metric, which is
+		// itself proof the device exists - trust it over the device listing.
+		// The two are cached under separate keys with separate expiry, so
+		// after a device is added one can refresh before the other; taking
+		// the device listing's word for it would silently drop the new
+		// device's series from a fan-out for the rest of its TTL, while the
+		// same query as a single series rendered fine.
+		if qm.Scope == ScopeDevice && v.DeviceID == qm.DeviceID.Int64() {
+			deviceExists = true
+		}
 		return sc, deviceExists, nil
 	}
 

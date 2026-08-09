@@ -125,14 +125,6 @@ export class DataSource extends DataSourceWithBackend<DomotzQuery, DomotzDataSou
     return this.getResource('collectors');
   }
 
-  getDevices(collectorId: string | undefined): Promise<Device[]> {
-    const collector = this.resolveId(collectorId);
-    if (!collector) {
-      return Promise.resolve([]);
-    }
-    return this.getResource(`collectors/${collector}/devices`);
-  }
-
   /**
    * Devices belonging to any of several collectors.
    *

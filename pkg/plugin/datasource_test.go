@@ -37,6 +37,12 @@ type stubAPI struct {
 	// subsequent call rejects with 403, as a shared collector the key was never
 	// granted does.
 	withForbiddenCollector bool
+	// staleDeviceList omits device 11 from the device listing while the
+	// variable listing still reports variables belonging to it, which is what
+	// two independently-expiring caches look like just after a device is added.
+	staleDeviceList bool
+	// collector 8's own variables, served when withSecondCollector is set.
+	withSecondCollector bool
 }
 
 func newStubAPI(t *testing.T) *stubAPI {
@@ -71,6 +77,13 @@ func newStubAPI(t *testing.T) *stubAPI {
 				respondList(w, r, 0, `[]`)
 				return
 			}
+			if s.withSecondCollector {
+				respondList(w, r, 2, `[
+					{"id":7,"display_name":"Acme HQ"},
+					{"id":8,"display_name":"Second Site"}
+				]`)
+				return
+			}
 			if s.withForbiddenCollector {
 				respondList(w, r, 2, `[
 					{"id":7,"display_name":"Acme HQ"},
@@ -81,6 +94,10 @@ func newStubAPI(t *testing.T) *stubAPI {
 			respondList(w, r, 1, `[{"id":7,"display_name":"Acme HQ","licence":{"expiration_time":null}}]`)
 
 		case path == "/agent/7/device":
+			if s.staleDeviceList {
+				respondList(w, r, 1, `[{"id":12,"display_name":"Edge AP"}]`)
+				return
+			}
 			respondList(w, r, 2, `[{"id":11,"display_name":"Core Switch"},{"id":12,"display_name":"Edge AP"}]`)
 
 		case path == "/agent/7/device/11/variable":
@@ -104,7 +121,17 @@ func newStubAPI(t *testing.T) *stubAPI {
 			]`)
 
 		case path == "/agent/7/variable":
-			respondList(w, r, 1, `[{"id":55,"label":"Collector Uptime","unit":"s","has_history":true}]`)
+			respondList(w, r, 2, `[
+				{"id":55,"label":"Collector Uptime","unit":"s","path":"perf/uptime","has_history":true},
+				{"id":56,"label":"Requests","unit":"req/h","path":"perf/requests","has_history":true}
+			]`)
+
+		case path == "/agent/8/variable":
+			s.agentRequests.Add(1)
+			respondList(w, r, 2, `[
+				{"id":58,"label":"Collector Uptime","unit":"s","path":"perf/uptime","has_history":true},
+				{"id":59,"label":"Dock Humidity","unit":"%","path":"perf/humidity","has_history":true}
+			]`)
 
 		case strings.HasSuffix(path, "/history"):
 			s.historyRequests.Add(1)
@@ -446,10 +473,21 @@ func callResourceMethod(t *testing.T, ds *DomotzDatasource, method, path string)
 		return nil
 	})
 
+	// Grafana sends Path without the query string and URL with it, and
+	// httpadapter rebuilds the request as Path + "?" + URL's query. Passing the
+	// query in both fields appends it twice, which silently corrupts the first
+	// parameter's value rather than failing - so split them the way the real
+	// caller does.
+	reqPath, query, _ := strings.Cut(path, "?")
+	reqURL := reqPath
+	if query != "" {
+		reqURL += "?" + query
+	}
+
 	err := ds.CallResource(context.Background(), &backend.CallResourceRequest{
 		Method: method,
-		Path:   path,
-		URL:    path,
+		Path:   reqPath,
+		URL:    reqURL,
 	}, sender)
 	require.NoError(t, err)
 	return status, body
@@ -609,4 +647,124 @@ func TestQueryData_UnauthorizedRemainsFatalInAFanOut(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Error(t, resp.Responses["A"].Error)
+}
+
+// A panel pinned to a sensor that has since been removed must read as an empty
+// series, not an error. The API answers history for an unknown variable id with
+// 403 on the device route and 503 on the collector one, so the id cannot simply
+// be sent and the failure absorbed - the query has to stop before asking.
+func TestQueryData_RetiredVariableAddressedByIdRendersEmptyWithoutFetching(t *testing.T) {
+	api := newStubAPI(t)
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(),
+		queryRequest(t, "A", QueryModel{Scope: ScopeDevice, AgentID: 7, DeviceID: 11, VariableID: 424242}))
+	require.NoError(t, err)
+
+	res := resp.Responses["A"]
+	require.NoError(t, res.Error, "a retired sensor must not break the panel")
+	require.Len(t, res.Frames, 1, "the series is still named, just empty")
+	require.Zero(t, api.historyRequests.Load(), "history must not be requested for an id that resolved to nothing")
+}
+
+// The device listing and the device-variable listing are cached under separate
+// keys with separate expiry, so just after a device is added one can refresh
+// before the other. The variable listing naming the device is itself proof it
+// exists; trusting the stale device listing dropped the new device's series
+// from a fan-out with no error at all.
+func TestQueryData_NewDeviceSurvivesAStaleDeviceListing(t *testing.T) {
+	api := newStubAPI(t)
+	api.staleDeviceList = true
+	api.historyBody = `[{"timestamp":"2026-08-04T10:00:00Z","value":"5"}]`
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(), rawQueryRequest(t, "A",
+		`{"scope":"device","agentId":7,"deviceId":"{11,12}","variableId":"snmp/if/bandwidth"}`))
+	require.NoError(t, err)
+
+	res := resp.Responses["A"]
+	require.NoError(t, res.Error)
+	require.Len(t, res.Frames, 2, "the device missing from the stale listing still has a series")
+}
+
+// A unit Grafana maps becomes structured FieldConfig.Unit and formats the axis.
+// One it does not map used to vanish entirely, leaving a bare number whose
+// meaning depended on which similarly named metric you were reading.
+func TestQueryData_UnmappedUnitIsKeptInTheSeriesName(t *testing.T) {
+	api := newStubAPI(t)
+	api.historyBody = `[{"timestamp":"2026-08-04T10:00:00Z","value":"12"}]`
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(),
+		queryRequest(t, "A", QueryModel{Scope: ScopeCollector, AgentID: 7, VariableID: 56}))
+	require.NoError(t, err)
+
+	value := resp.Responses["A"].Frames[0].Fields[1]
+	require.Equal(t, "Acme HQ: Requests [req/h]", value.Config.DisplayNameFromDS)
+	require.Empty(t, value.Config.Unit, "an unmapped unit must not be guessed into a structured one")
+}
+
+// A mapped unit is already shown by the axis, so repeating it in the name would
+// read "Bandwidth [%]" beside an axis labelled %.
+func TestQueryData_MappedUnitIsNotRepeatedInTheSeriesName(t *testing.T) {
+	api := newStubAPI(t)
+	api.historyBody = `[{"timestamp":"2026-08-04T10:00:00Z","value":"12"}]`
+	ds := newTestDatasource(t, api)
+
+	resp, err := ds.QueryData(context.Background(),
+		queryRequest(t, "A", QueryModel{Scope: ScopeDevice, AgentID: 7, DeviceID: 11, VariableID: 99}))
+	require.NoError(t, err)
+
+	value := resp.Responses["A"].Frames[0].Fields[1]
+	require.Equal(t, "Acme HQ - Core Switch: Bandwidth", value.Config.DisplayNameFromDS)
+	require.Equal(t, "percent", value.Config.Unit)
+}
+
+// recovered is what keeps a panic on a spawned goroutine from taking the plugin
+// process - and every dashboard using this data source - down with it. The SDK's
+// own recovery interceptor only guards the goroutine serving the RPC.
+func TestRecovered(t *testing.T) {
+	res, panicked := recovered(nil, "nothing")
+	require.False(t, panicked)
+	require.Nil(t, res.Error)
+
+	res, panicked = recovered("boom", "query A")
+	require.True(t, panicked)
+	require.Error(t, res.Error)
+	require.Equal(t, backend.StatusInternal, res.Status)
+	require.Contains(t, res.Error.Error(), "query A")
+}
+
+// The shared-collector route had no test at all, which is how a sequential loop
+// under a docstring promising a fan-out went unnoticed.
+func TestResource_SharedCollectorVariablesDeduplicateByPath(t *testing.T) {
+	api := newStubAPI(t)
+	api.withSecondCollector = true
+	ds := newTestDatasource(t, api)
+
+	status, body := callResourceMethod(t, ds, http.MethodGet,
+		"/shared-collector-variables?hasHistory=false&collectors=7,8")
+	require.Equal(t, http.StatusOK, status)
+
+	var got []struct {
+		Path         string `json:"path"`
+		DisplayLabel string `json:"displayLabel"`
+	}
+	require.NoError(t, json.Unmarshal(body, &got))
+
+	paths := make([]string, len(got))
+	for i, v := range got {
+		paths[i] = v.Path
+	}
+	// perf/uptime is on both collectors under different ids and must appear
+	// once; the order follows the order the caller asked for, so the dropdown
+	// does not reshuffle between refreshes.
+	require.Equal(t, []string{"perf/uptime", "perf/requests", "perf/humidity"}, paths)
+}
+
+func TestResource_SharedCollectorVariablesRejectsNonNumericIds(t *testing.T) {
+	ds := newTestDatasource(t, newStubAPI(t))
+
+	status, _ := callResourceMethod(t, ds, http.MethodGet, "/shared-collector-variables?collectors=7,nope")
+	require.Equal(t, http.StatusBadRequest, status)
 }

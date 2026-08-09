@@ -90,7 +90,7 @@ describe('resource lookups', () => {
     const ds = makeDataSource();
     const getResource = jest.spyOn(ds, 'getResource');
 
-    await expect(ds.getDevices(undefined)).resolves.toEqual([]);
+    await expect(ds.getDevicesForCollectors(undefined)).resolves.toEqual([]);
     await expect(ds.getCollectorVariables('')).resolves.toEqual([]);
     await expect(ds.getDeviceVariables('7', '')).resolves.toEqual([]);
 
@@ -126,20 +126,36 @@ describe('resource lookups', () => {
     const ds = makeDataSource();
     const getResource = jest.spyOn(ds, 'getResource').mockResolvedValue([]);
 
-    await ds.getDevices('$collector');
+    await ds.getDevicesForCollectors('$collector');
 
     expect(getResource).toHaveBeenCalledWith('collectors/200891/devices');
   });
 
+  // The Collector field advertises multi-value variables, so the device list
+  // has to span every site the field resolves to. Listing devices for a single
+  // id left the picker silently empty for exactly the arrangement the field's
+  // own tooltip recommends.
+  it('lists devices across every collector a multi-value variable resolves to', async () => {
+    replace.mockImplementation((target?: string) => (target === '$collector' ? '{7,8}' : target ?? ''));
+
+    const ds = makeDataSource();
+    const getResource = jest.spyOn(ds, 'getResource').mockResolvedValue([]);
+
+    await ds.getDevicesForCollectors('$collector');
+
+    expect(getResource).toHaveBeenCalledWith('collectors/7/devices');
+    expect(getResource).toHaveBeenCalledWith('collectors/8/devices');
+  });
+
   // A value that is not a plain number after interpolation cannot be a valid id,
   // so no request is issued - and nothing unencoded can reach the path.
-  it.each(['a/b', '$undefined', '{11,12}', '  '])('issues no request for %p', async (raw) => {
+  it.each(['a/b', '$undefined', '  '])('issues no request for %p', async (raw) => {
     replace.mockImplementation((target?: string) => target ?? '');
 
     const ds = makeDataSource();
     const getResource = jest.spyOn(ds, 'getResource');
 
-    await expect(ds.getDevices(raw)).resolves.toEqual([]);
+    await expect(ds.getDevicesForCollectors(raw)).resolves.toEqual([]);
 
     expect(getResource).not.toHaveBeenCalled();
   });

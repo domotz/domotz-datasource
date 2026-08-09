@@ -40,13 +40,6 @@ export function filterOptions<T extends ComboboxOption<string>>(options: T[], in
 }
 
 /**
- * Device picker option: the name on the first line, addresses on the second.
- *
- * Both lines are searchable - see filterOptions - so keeping the address off
- * the label costs nothing in findability and makes a list of a hundred devices
- * scannable.
- */
-/**
  * Collector picker option: the site name, with its online state on the second
  * line.
  *
@@ -75,6 +68,13 @@ export function flattenOption(option: ComboboxOption<string>): string {
   return join(option.label ?? option.value, option.description);
 }
 
+/**
+ * Device picker option: the name on the first line, addresses on the second.
+ *
+ * Both lines are searchable - see filterOptions - so keeping the address off
+ * the label costs nothing in findability and makes a list of a hundred devices
+ * scannable.
+ */
 export function deviceOption(device: Device): ComboboxOption<string> {
   const name = device.display_name?.trim() || `Device ${device.id}`;
   const ip = device.ip_addresses?.[0];

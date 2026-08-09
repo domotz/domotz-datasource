@@ -505,12 +505,27 @@ func buildValueField(points []point, numeric bool, sc SeriesContext) *data.Field
 }
 
 // displayName is the human-readable series name shown in legends.
+//
+// A unit Grafana understands is set as structured FieldConfig.Unit and formats
+// the axis, so repeating it in the name would read "Download [b/s]" beside an
+// axis already labelled Mb/s. A unit it does not understand is dropped
+// entirely, and on a real account that is 9% of the variables carrying one
+// (req/h, Packets, KB) - so those get the unit appended to the name instead,
+// rather than showing a bare number whose meaning depends on which similarly
+// named metric you are looking at.
 func displayName(sc SeriesContext) string {
 	name := sc.CollectorName
 	if sc.DeviceName != "" {
 		name += " - " + sc.DeviceName
 	}
-	return name + ": " + sc.Variable.DisplayLabel()
+	name += ": " + sc.Variable.DisplayLabel()
+
+	if unit := strings.TrimSpace(sc.Variable.Unit); unit != "" {
+		if _, mapped := grafanaUnit(unit); !mapped {
+			name += " [" + unit + "]"
+		}
+	}
+	return name
 }
 
 // point is one sample with both representations retained, so the series-wide

@@ -117,7 +117,11 @@ export function QueryEditor({ query, onChange, onRunQuery, datasource }: Props) 
     let cancelled = false;
     setLoading((s) => ({ ...s, devices: true }));
 
-    const request = datasource.getDevices(query.agentId).then((list) => list.map(deviceOption));
+    // Across every collector the field resolves to, not just a single one. The
+    // tooltip on this row invites a multi-value variable in Collector, and
+    // listing devices for one id left the picker silently empty in exactly that
+    // case - the one arrangement the tooltip was recommending.
+    const request = datasource.getDevicesForCollectors(query.agentId).then((list) => list.map(deviceOption));
     pending.current.devices = request.catch(() => []);
 
     request
