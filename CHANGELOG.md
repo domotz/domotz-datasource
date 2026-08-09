@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0-beta.5
+
+Code-review fixes. The first two are worth upgrading for.
+
+- A panic while answering a query no longer takes the plugin process down with it. Queries are
+  answered on their own goroutines, which the SDK's own panic handling cannot reach, so a single bad
+  series could blank every dashboard using the data source until Grafana restarted it. A panic now
+  fails just the query that caused it.
+- A panel pinned to a sensor that has since been removed reads as an empty series again instead of
+  an error. The API answers history for an unknown metric with 403 or 503 rather than an empty list,
+  so the request has to be skipped rather than made and forgiven.
+- A device added to a collector appears in comparison panels immediately, instead of being missing
+  for up to five minutes while two independently-expiring caches disagreed about whether it existed.
+- The Device picker lists devices from every collector the Collector field resolves to. Pointing
+  Collector at a multi-value variable — which its own tooltip recommends — used to leave the picker
+  empty with no explanation.
+- Metrics whose unit Grafana does not recognise show it in the legend (`Requests [req/h]`) instead
+  of dropping it. On a real account that is 9% of the metrics carrying a unit.
+- The metric list for several collectors is fetched in parallel rather than one site after another.
+
 ## 1.0.0-beta.4
 
 - Metrics can be compared across several devices, and across several collectors. Selecting more than
